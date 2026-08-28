@@ -12,6 +12,7 @@ import {
   HeldOrder,
   TrialSessionInfo,
   CartItem,
+  AutoBackupEntry,
 } from '../types';
 import {
   INITIAL_CATEGORIES,
@@ -27,7 +28,9 @@ import {
 import {
   hashPassword,
   isHashedPassword,
-  verifyPassword
+  verifyPassword,
+  encryptStorageData,
+  decryptStorageData,
 } from '../utils/security';
 
 const KEYS = {
@@ -47,14 +50,16 @@ const KEYS = {
   ACTIVE_USER_ID: 'pos_active_user_id_v2_kiosk',
   TRIAL_SESSION: 'pos_trial_session_v2_kiosk',
   TRIAL_USED_FLAG: 'pos_trial_used_flag_v2_kiosk',
+  AUTO_BACKUPS: 'pos_auto_backups_v2_kiosk',
+  LAST_AUTO_BACKUP_DATE: 'pos_last_auto_backup_date_v2_kiosk',
 };
 
-// Safe LocalStorage helpers
+// Safe LocalStorage helpers with transparent envelope encryption
 function getItem<T>(key: string, defaultValue: T): T {
   try {
     const raw = localStorage.getItem(key);
     if (!raw) return defaultValue;
-    return JSON.parse(raw) as T;
+    return decryptStorageData<T>(raw, defaultValue);
   } catch (e) {
     console.error(`Error reading ${key} from storage:`, e);
     return defaultValue;
@@ -63,7 +68,8 @@ function getItem<T>(key: string, defaultValue: T): T {
 
 function setItem<T>(key: string, value: T): void {
   try {
-    localStorage.setItem(key, JSON.stringify(value));
+    const encrypted = encryptStorageData(value);
+    localStorage.setItem(key, encrypted);
   } catch (e) {
     console.error(`Error writing ${key} to storage:`, e);
   }
@@ -105,33 +111,17 @@ export const StorageService = {
       needsPersistenceSync = true;
     }
 
-    // Ensure all accounts have valid attributes, plainPin if available, and securely hashed PINs
+    // Ensure all accounts have valid attributes and securely salted hashed PINs
     const merged: User[] = workingList.map((u) => {
       const initial = INITIAL_USERS.find((init) => init.id === u.id);
       
-      let rawPhone = u.phone || initial?.phone || (u.id === 'user_admin' ? '0553514215' : '0550000000');
-      let rawPin = u.pin || initial?.pin || (u.id === 'user_admin' ? 'oussama12$' : '123456');
-      let plainPin = u.plainPin || initial?.plainPin;
-      let role = u.role || initial?.role || (u.id === 'user_admin' ? 'admin' : 'cashier');
+      const rawPhone = u.phone || initial?.phone || (u.id === 'user_admin' ? '0553514215' : '0550000000');
+      const rawPin = u.pin || initial?.pin || '';
+      const role = u.role || initial?.role || (u.id === 'user_admin' ? 'admin' : 'cashier');
 
-      if (u.id === 'user_admin') {
-        rawPhone = u.phone && u.phone !== '0550000000' ? u.phone : '0553514215';
-        role = 'admin';
-        // If plain legacy default was present, ensure default is current master credentials
-        if (u.pin === '123456' || !plainPin) {
-          plainPin = 'oussama12$';
-          rawPin = 'oussama12$';
-        }
-      }
-
-      // If user had plain text PIN stored previously
-      if (!plainPin && !isHashedPassword(rawPin)) {
-        plainPin = rawPin;
-      }
-
-      // Hash PIN if it is not yet hashed
+      // Ensure PIN is properly hashed
       let finalPin = rawPin;
-      if (!isHashedPassword(rawPin)) {
+      if (!isHashedPassword(rawPin) && rawPin) {
         finalPin = hashPassword(rawPin);
         needsPersistenceSync = true;
       }
@@ -140,7 +130,6 @@ export const StorageService = {
         ...u,
         phone: rawPhone,
         pin: finalPin,
-        plainPin: plainPin || undefined,
         role,
         isActive: u.isActive !== undefined ? u.isActive : true,
         isTrial: u.isTrial || false,
@@ -148,7 +137,7 @@ export const StorageService = {
       };
     });
 
-    // Auto-migrate and persist hashed credentials immediately if any plaintext was found
+    // Auto-migrate and persist hashed credentials immediately if any unhashed PIN was found
     if (needsPersistenceSync || raw.length === 0) {
       setItem(KEYS.USERS, merged);
     }
@@ -163,7 +152,6 @@ export const StorageService = {
       return {
         ...u,
         pin: isHashed ? u.pin : hashPassword(u.pin),
-        plainPin: u.plainPin,
         isTrial: u.isTrial || false,
       };
     });
@@ -634,6 +622,88 @@ export const StorageService = {
   saveShifts(shifts: ShiftLog[], userId?: string): void {
     const key = getScopedKey(KEYS.SHIFTS, userId);
     setItem(key, shifts);
+  },
+
+  // Automatic Daily & Periodic Backup Management
+  getAutoBackups(userId?: string): AutoBackupEntry[] {
+    const key = getScopedKey(KEYS.AUTO_BACKUPS, userId);
+    return getItem<AutoBackupEntry[]>(key, []);
+  },
+
+  saveAutoBackup(note: string = 'نسخة تلقائية دورية', userId?: string): { success: boolean; id: string; timestamp: string } {
+    try {
+      const backupJson = this.exportBackup(userId);
+      const products = this.getProducts(userId);
+      const sales = this.getSales(userId);
+      const customers = this.getCustomers(userId);
+      const id = `backup_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const now = new Date();
+      const createdAtFormatted = now.toLocaleDateString('ar-DZ', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+
+      const newEntry: AutoBackupEntry = {
+        id,
+        timestamp: now.toISOString(),
+        createdAtFormatted,
+        note,
+        itemsCount: products.length,
+        salesCount: sales.length,
+        customersCount: customers.length,
+        dataJson: backupJson,
+      };
+
+      const existing = this.getAutoBackups(userId);
+      // Keep up to last 10 rotating backups
+      const updated = [newEntry, ...existing].slice(0, 10);
+      const key = getScopedKey(KEYS.AUTO_BACKUPS, userId);
+      setItem(key, updated);
+
+      const dateKey = getScopedKey(KEYS.LAST_AUTO_BACKUP_DATE, userId);
+      localStorage.setItem(dateKey, now.toISOString().split('T')[0]);
+
+      return { success: true, id, timestamp: newEntry.timestamp };
+    } catch (e) {
+      console.error('Error creating auto backup:', e);
+      return { success: false, id: '', timestamp: '' };
+    }
+  },
+
+  restoreAutoBackup(backupId: string, userId?: string): { success: boolean; message: string } {
+    const backups = this.getAutoBackups(userId);
+    const target = backups.find((b) => b.id === backupId);
+    if (!target) return { success: false, message: 'النسخة الاحتياطية المطلوبة غير موجودة' };
+    return this.importBackup(target.dataJson, userId);
+  },
+
+  deleteAutoBackup(backupId: string, userId?: string): boolean {
+    const backups = this.getAutoBackups(userId);
+    const filtered = backups.filter((b) => b.id !== backupId);
+    if (filtered.length !== backups.length) {
+      const key = getScopedKey(KEYS.AUTO_BACKUPS, userId);
+      setItem(key, filtered);
+      return true;
+    }
+    return false;
+  },
+
+  runDailyAutoBackupIfNeeded(userId?: string): boolean {
+    try {
+      const today = new Date().toISOString().split('T')[0];
+      const dateKey = getScopedKey(KEYS.LAST_AUTO_BACKUP_DATE, userId);
+      const lastDate = localStorage.getItem(dateKey);
+      if (lastDate !== today) {
+        this.saveAutoBackup('نسخة احتياطية يومية آلية', userId);
+        return true;
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
   },
 
   // Export / Import Full Database Backup

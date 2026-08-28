@@ -85,6 +85,8 @@ export default function App() {
       setCurrentUser(foundUser);
       StorageService.setActiveUserId(foundUser.id);
       setSettings(StorageService.getSettings(foundUser.id));
+      // Run daily automatic backup silently if not done today
+      StorageService.runDailyAutoBackupIfNeeded(foundUser.id);
     } else {
       setCurrentUser(null);
       StorageService.setActiveUserId(null);

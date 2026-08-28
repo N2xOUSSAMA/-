@@ -1,6 +1,9 @@
 /**
  * Security & Cryptography Utilities
- * Provides synchronous SHA-256 hashing with salt for secure storage of PINs and passwords in localStorage.
+ * Provides:
+ * 1. Synchronous SHA-256 hashing with dynamic per-user random salt.
+ * 2. Multi-version password verification (v3 salted, v2 legacy, plaintext fallback).
+ * 3. LocalStorage Data Obfuscation / Encryption envelope to protect customer debts, sales, and prices from plain DevTools inspection.
  */
 
 function rightRotate(value: number, amount: number): number {
@@ -13,7 +16,7 @@ function rightRotate(value: number, amount: number): number {
 export function sha256Sync(ascii: string): string {
   const mathPow = Math.pow;
   const maxWord = mathPow(2, 32);
-  let lengthProperty = 'length';
+  const lengthProperty = 'length';
   let i: number, j: number;
   let result = '';
 
@@ -93,26 +96,50 @@ export function sha256Sync(ascii: string): string {
   return result;
 }
 
-const HASH_PREFIX = '$sha256$kiosk_v2$';
-const GLOBAL_SALT = 'kiosk_pos_secret_salt_2026_';
+const HASH_V3_PREFIX = '$sha256$kiosk_v3$';
+const HASH_V2_PREFIX = '$sha256$kiosk_v2$';
+const LEGACY_GLOBAL_SALT = 'kiosk_pos_secret_salt_2026_';
 
 /**
- * Hashes a plain-text PIN or password with salt.
- * If already hashed, returns as-is.
+ * Generates a cryptographically strong pseudo-random salt string.
  */
-export function hashPassword(plainText: string): string {
-  if (!plainText) return '';
-  if (isHashedPassword(plainText)) return plainText;
-  const hash = sha256Sync(GLOBAL_SALT + plainText.trim());
-  return `${HASH_PREFIX}${hash}`;
+export function generateRandomSalt(length: number = 16): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()';
+  let salt = '';
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+    const bytes = new Uint8Array(length);
+    crypto.getRandomValues(bytes);
+    for (let i = 0; i < length; i++) {
+      salt += chars[bytes[i] % chars.length];
+    }
+  } else {
+    for (let i = 0; i < length; i++) {
+      salt += chars[Math.floor(Math.random() * chars.length)];
+    }
+  }
+  return salt;
 }
 
 /**
- * Checks if a string is already a formatted SHA-256 hash.
+ * Hashes a plain-text PIN or password with an individual random salt (v3 format).
+ * Format: $sha256$kiosk_v3$<salt>$<hash>
+ */
+export function hashPassword(plainText: string, customSalt?: string): string {
+  if (!plainText) return '';
+  if (isHashedPassword(plainText)) return plainText;
+  const salt = customSalt || generateRandomSalt(16);
+  const hash = sha256Sync(`${salt}:${plainText.trim()}:${salt}`);
+  return `${HASH_V3_PREFIX}${salt}$${hash}`;
+}
+
+/**
+ * Checks if a string is already a formatted SHA-256 hash (v3 or legacy v2).
  */
 export function isHashedPassword(value: string | undefined | null): boolean {
   if (!value || typeof value !== 'string') return false;
-  return value.startsWith(HASH_PREFIX) && value.length === HASH_PREFIX.length + 64;
+  if (value.startsWith(HASH_V3_PREFIX)) return true;
+  if (value.startsWith(HASH_V2_PREFIX) && value.length === HASH_V2_PREFIX.length + 64) return true;
+  return false;
 }
 
 /**
@@ -121,10 +148,73 @@ export function isHashedPassword(value: string | undefined | null): boolean {
 export function verifyPassword(plainInput: string, storedHashOrPlain: string): boolean {
   if (!plainInput || !storedHashOrPlain) return false;
   const cleanInput = plainInput.trim();
-  if (isHashedPassword(storedHashOrPlain)) {
-    const computedHash = hashPassword(cleanInput);
-    return computedHash === storedHashOrPlain;
+
+  // 1. Check v3 format ($sha256$kiosk_v3$<salt>$<hash>)
+  if (storedHashOrPlain.startsWith(HASH_V3_PREFIX)) {
+    const parts = storedHashOrPlain.slice(HASH_V3_PREFIX.length).split('$');
+    if (parts.length === 2) {
+      const [salt, expectedHash] = parts;
+      const computedHash = sha256Sync(`${salt}:${cleanInput}:${salt}`);
+      return computedHash === expectedHash;
+    }
   }
-  // Fallback for legacy plain text passwords before migration
+
+  // 2. Check legacy v2 format ($sha256$kiosk_v2$<hash>)
+  if (storedHashOrPlain.startsWith(HASH_V2_PREFIX)) {
+    const computedLegacy = sha256Sync(LEGACY_GLOBAL_SALT + cleanInput);
+    return `${HASH_V2_PREFIX}${computedLegacy}` === storedHashOrPlain;
+  }
+
+  // 3. Fallback for unhashed legacy input
   return cleanInput === storedHashOrPlain;
+}
+
+/**
+ * ========================================================
+ * LOCALSTORAGE DATA ENCRYPTION & OBFUSCATION LAYER
+ * Protects database entries from plaintext inspection in browser DevTools.
+ * ========================================================
+ */
+const ENCRYPT_PREFIX = 'ENC_V1_::';
+const STORAGE_PEPPER = 'KIOSK_POS_SECURE_STORAGE_KEY_2026';
+
+export function encryptStorageData<T>(data: T): string {
+  try {
+    const jsonStr = JSON.stringify(data);
+    // Lightweight reversible XOR stream cipher + UTF-8 Base64 encoding
+    let encoded = '';
+    for (let i = 0; i < jsonStr.length; i++) {
+      const charCode = jsonStr.charCodeAt(i);
+      const pepperCode = STORAGE_PEPPER.charCodeAt(i % STORAGE_PEPPER.length);
+      encoded += String.fromCharCode(charCode ^ pepperCode);
+    }
+    const b64 = btoa(encodeURIComponent(encoded));
+    return `${ENCRYPT_PREFIX}${b64}`;
+  } catch (e) {
+    // Fallback to regular JSON stringification if encoding fails
+    return JSON.stringify(data);
+  }
+}
+
+export function decryptStorageData<T>(raw: string, defaultValue: T): T {
+  if (!raw) return defaultValue;
+  try {
+    // If it is encrypted with our storage envelope
+    if (raw.startsWith(ENCRYPT_PREFIX)) {
+      const b64 = raw.slice(ENCRYPT_PREFIX.length);
+      const decodedStr = decodeURIComponent(atob(b64));
+      let jsonStr = '';
+      for (let i = 0; i < decodedStr.length; i++) {
+        const charCode = decodedStr.charCodeAt(i);
+        const pepperCode = STORAGE_PEPPER.charCodeAt(i % STORAGE_PEPPER.length);
+        jsonStr += String.fromCharCode(charCode ^ pepperCode);
+      }
+      return JSON.parse(jsonStr) as T;
+    }
+    // Backward compatibility: read legacy plaintext JSON directly
+    return JSON.parse(raw) as T;
+  } catch (e) {
+    console.error('Error decrypting storage data:', e);
+    return defaultValue;
+  }
 }

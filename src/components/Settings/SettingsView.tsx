@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { StoreSettings, User } from '../../types';
+import { StoreSettings, User, AutoBackupEntry } from '../../types';
 import { StorageService } from '../../services/storage';
 import {
   Settings,
@@ -47,6 +47,9 @@ import {
   ShoppingBag,
   Package,
   User as UserIcon,
+  History,
+  Clock,
+  HardDrive,
 } from 'lucide-react';
 
 interface SettingsViewProps {
@@ -118,7 +121,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [quickNewPin, setQuickNewPin] = useState<string>('');
   const [quickShowPin, setQuickShowPin] = useState<boolean>(true);
 
-  // Load latest users from storage
+  // Load latest users and auto-backups from storage
+  const [autoBackups, setAutoBackups] = useState<AutoBackupEntry[]>([]);
+
+  const loadAutoBackups = () => {
+    setAutoBackups(StorageService.getAutoBackups());
+  };
+
   const loadUsersList = () => {
     const loaded = StorageService.getUsers();
     setUsers(loaded);
@@ -126,6 +135,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   useEffect(() => {
     loadUsersList();
+    loadAutoBackups();
   }, []);
 
   // Update initial form state if currentUser changes
@@ -509,6 +519,51 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       if (onRefreshData) onRefreshData();
       window.location.reload();
     }
+  };
+
+  const handleCreateAutoSnapshot = () => {
+    const res = StorageService.saveAutoBackup('نقطة استعادة يدوية فورية');
+    if (res.success) {
+      StorageService.playSuccessBeep();
+      loadAutoBackups();
+      setSaveSuccessMsg('تم إنشاء وحفظ نقطة استعادة فورية بنجاح!');
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
+    }
+  };
+
+  const handleRestoreSnapshot = (backup: AutoBackupEntry) => {
+    if (
+      confirm(
+        `هل أنت متأكد من رغبتك في استعادة النسخة الاحتياطية المؤرخة في: ${backup.createdAtFormatted}؟\nسيتم استبدال البيانات الحالية بمحتوى هذه النسخة.`
+      )
+    ) {
+      const res = StorageService.restoreAutoBackup(backup.id);
+      alert(res.message);
+      if (res.success) {
+        if (onRefreshData) onRefreshData();
+        window.location.reload();
+      }
+    }
+  };
+
+  const handleDeleteSnapshot = (backupId: string) => {
+    if (confirm('هل أنت متأكد من رغبتك في حذف نقطة الاستعادة هذه؟')) {
+      StorageService.deleteAutoBackup(backupId);
+      loadAutoBackups();
+    }
+  };
+
+  const handleDownloadSnapshot = (backup: AutoBackupEntry) => {
+    const blob = new Blob([backup.dataJson], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `pos_snapshot_${backup.timestamp.split('T')[0]}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   // System Stats for Admin Panel
@@ -1567,13 +1622,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   )
                   .map((u) => {
                   const isEyeOpen = Boolean(visiblePasswords[u.id]);
-                  const displayPassword =
-                    u.plainPin ||
-                    (u.id === 'user_admin'
-                      ? 'oussama12$'
-                      : u.id === 'user_cashier1'
-                      ? '000000'
-                      : '111111');
+                  const displayPassword = u.plainPin || '••••••';
                   const isCurrent = u.id === currentUser.id;
 
                   return (
@@ -1762,10 +1811,108 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         {/* ======================================================== */}
         {isAdmin && activeTab === 'backup' && (
           <div className="space-y-4">
+            {/* Automatic Daily Snapshots System */}
+            <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-5 shadow-2xs space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3 gap-3">
+                <div className="space-y-0.5">
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                    <History className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                    <span>نقاط الاستعادة والنسخ الاحتياطي التلقائي اليومي</span>
+                  </h3>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    يقوم النظام بحفظ لقطة أوتوماتيكية يومياً لحماية البيانات من الضياع، ويمكنك استعادة أي نقطة بضغطة زر واحدة.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleCreateAutoSnapshot}
+                  className="py-2 px-3.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center gap-2 shadow-xs transition-colors cursor-pointer shrink-0"
+                >
+                  <Sparkles className="w-4 h-4" />
+                  <span>+ حفظ نقطة استعادة فورية الآن</span>
+                </button>
+              </div>
+
+              {/* Snapshots List */}
+              {autoBackups.length === 0 ? (
+                <div className="p-6 text-center bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-dashed border-slate-200 dark:border-slate-700">
+                  <Clock className="w-8 h-8 text-slate-400 mx-auto mb-2 opacity-60" />
+                  <p className="text-xs font-bold text-slate-600 dark:text-slate-400">
+                    لا توجد نقاط استعادة محفوظة بعد
+                  </p>
+                  <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1">
+                    سيقوم النظام بحفظ نسخة أوتوماتيكية عند أول فتح يومي، أو اضغط الزر أعلاه للإنشاء الفوري.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  {autoBackups.map((b) => (
+                    <div
+                      key={b.id}
+                      className="p-3.5 bg-slate-50/80 dark:bg-slate-800/50 rounded-2xl border border-slate-200/80 dark:border-slate-700/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:border-emerald-300 dark:hover:border-emerald-800 transition-all"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="p-2 bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 rounded-xl">
+                          <HardDrive className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-black text-slate-900 dark:text-slate-100">
+                              {b.createdAtFormatted}
+                            </span>
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300">
+                              {b.reason}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-3 text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                            <span>📦 {b.productsCount} منتج</span>
+                            <span>•</span>
+                            <span>🧾 {b.salesCount} فاتورة</span>
+                            <span>•</span>
+                            <span>👥 {b.customersCount} عميل</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleRestoreSnapshot(b)}
+                          className="py-1.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          <span>استعادة</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadSnapshot(b)}
+                          title="تنزيل كملف JSON"
+                          className="p-1.5 bg-slate-200 hover:bg-slate-300 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-lg transition-colors cursor-pointer"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteSnapshot(b.id)}
+                          title="حذف هذه النقطة"
+                          className="p-1.5 bg-rose-100 hover:bg-rose-200 dark:bg-rose-950/60 dark:hover:bg-rose-900/80 text-rose-600 dark:text-rose-300 rounded-lg transition-colors cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
             <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-5 shadow-2xs space-y-4">
               <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 border-b border-slate-100 dark:border-slate-800 pb-2 flex items-center gap-2">
                 <Database className="w-4 h-4 text-blue-500" />
-                النسخ الاحتياطي وحفظ بيانات الكشك
+                النسخ الاحتياطي اليدوي وتصدير/استيراد الملفات
               </h3>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

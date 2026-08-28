@@ -182,3 +182,14 @@ export interface ShiftLog {
   status: 'open' | 'closed';
   notes?: string;
 }
+
+export interface AutoBackupEntry {
+  id: string;
+  timestamp: string;
+  createdAtFormatted: string;
+  note: string;
+  itemsCount: number;
+  salesCount: number;
+  customersCount: number;
+  dataJson: string;
+}
