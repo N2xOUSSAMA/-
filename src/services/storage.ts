@@ -13,6 +13,8 @@ import {
   TrialSessionInfo,
   CartItem,
   AutoBackupEntry,
+  AuditLog,
+  StorageQuotaInfo,
 } from '../types';
 import {
   INITIAL_CATEGORIES,
@@ -52,9 +54,10 @@ const KEYS = {
   TRIAL_USED_FLAG: 'pos_trial_used_flag_v2_kiosk',
   AUTO_BACKUPS: 'pos_auto_backups_v2_kiosk',
   LAST_AUTO_BACKUP_DATE: 'pos_last_auto_backup_date_v2_kiosk',
+  AUDIT_LOGS: 'pos_audit_logs_v2_kiosk',
 };
 
-// Safe LocalStorage helpers with transparent envelope encryption
+// Safe LocalStorage helpers with transparent envelope encryption and Quota protection
 function getItem<T>(key: string, defaultValue: T): T {
   try {
     const raw = localStorage.getItem(key);
@@ -66,12 +69,32 @@ function getItem<T>(key: string, defaultValue: T): T {
   }
 }
 
-function setItem<T>(key: string, value: T): void {
+function setItem<T>(key: string, value: T): boolean {
   try {
     const encrypted = encryptStorageData(value);
     localStorage.setItem(key, encrypted);
+    return true;
   } catch (e) {
-    console.error(`Error writing ${key} to storage:`, e);
+    console.warn(`Storage quota exceeded or error writing ${key}, attempting automated storage pruning:`, e);
+    try {
+      // 1. Prune older audit logs if any
+      const rawLogs = localStorage.getItem(KEYS.AUDIT_LOGS);
+      if (rawLogs) {
+        const parsedLogs = decryptStorageData<AuditLog[]>(rawLogs, []);
+        if (parsedLogs.length > 50) {
+          const trimmed = parsedLogs.slice(0, 30);
+          localStorage.setItem(KEYS.AUDIT_LOGS, encryptStorageData(trimmed));
+        }
+      }
+
+      // 2. Retry setItem
+      const encrypted = encryptStorageData(value);
+      localStorage.setItem(key, encrypted);
+      return true;
+    } catch (retryError) {
+      console.error(`Critical storage write failure on key ${key}:`, retryError);
+      return false;
+    }
   }
 }
 
@@ -242,21 +265,15 @@ export const StorageService = {
       setItem(key, INITIAL_CATEGORIES);
       return INITIAL_CATEGORIES;
     }
-    try {
-      const parsed = JSON.parse(raw) as Category[];
-      // Check if cat_nuts_weight is in categories; if not, add it seamlessly
-      if (!parsed.some((c) => c.id === 'cat_nuts_weight')) {
-        const nutsCat = INITIAL_CATEGORIES.find((c) => c.id === 'cat_nuts_weight');
-        if (nutsCat) {
-          parsed.splice(1, 0, nutsCat);
-          setItem(key, parsed);
-        }
+    const parsed = getItem<Category[]>(key, INITIAL_CATEGORIES);
+    if (Array.isArray(parsed) && !parsed.some((c) => c.id === 'cat_nuts_weight')) {
+      const nutsCat = INITIAL_CATEGORIES.find((c) => c.id === 'cat_nuts_weight');
+      if (nutsCat) {
+        parsed.splice(1, 0, nutsCat);
+        setItem(key, parsed);
       }
-      return parsed;
-    } catch (e) {
-      console.error('Error parsing categories:', e);
-      return INITIAL_CATEGORIES;
     }
+    return Array.isArray(parsed) ? parsed : INITIAL_CATEGORIES;
   },
   saveCategories(categories: Category[], userId?: string): void {
     const key = getScopedKey(KEYS.CATEGORIES, userId);
@@ -283,8 +300,8 @@ export const StorageService = {
         const legacyRaw = localStorage.getItem(KEYS.PRODUCTS);
         if (legacyRaw) {
           try {
-            const legacyParsed = JSON.parse(legacyRaw);
-            if (Array.isArray(legacyParsed)) {
+            const legacyParsed = decryptStorageData<Product[]>(legacyRaw, []);
+            if (Array.isArray(legacyParsed) && legacyParsed.length > 0) {
               setItem(key, legacyParsed);
               return legacyParsed;
             }
@@ -297,13 +314,7 @@ export const StorageService = {
       setItem(key, []);
       return [];
     }
-    try {
-      const parsed = JSON.parse(raw) as Product[];
-      return Array.isArray(parsed) ? parsed : [];
-    } catch (e) {
-      console.error('Error parsing products:', e);
-      return [];
-    }
+    return getItem<Product[]>(key, []);
   },
   saveProducts(products: Product[], userId?: string): void {
     const key = getScopedKey(KEYS.PRODUCTS, userId);
@@ -533,8 +544,8 @@ export const StorageService = {
         const legacyRaw = localStorage.getItem(KEYS.CUSTOMERS);
         if (legacyRaw) {
           try {
-            const legacyParsed = JSON.parse(legacyRaw);
-            if (Array.isArray(legacyParsed)) {
+            const legacyParsed = decryptStorageData<Customer[]>(legacyRaw, []);
+            if (Array.isArray(legacyParsed) && legacyParsed.length > 0) {
               setItem(key, legacyParsed);
               return legacyParsed;
             }
@@ -545,12 +556,7 @@ export const StorageService = {
       setItem(key, []);
       return [];
     }
-    try {
-      const parsed = JSON.parse(raw) as Customer[];
-      return Array.isArray(parsed) ? parsed : [];
-    } catch (e) {
-      return [];
-    }
+    return getItem<Customer[]>(key, []);
   },
   saveCustomers(customers: Customer[], userId?: string): void {
     const key = getScopedKey(KEYS.CUSTOMERS, userId);
@@ -704,6 +710,84 @@ export const StorageService = {
     } catch (e) {
       return false;
     }
+  },
+
+  // Audit Logs System
+  getAuditLogs(limit: number = 100): AuditLog[] {
+    const logs = getItem<AuditLog[]>(KEYS.AUDIT_LOGS, []);
+    return logs.slice(0, limit);
+  },
+
+  logAudit(
+    action: AuditLog['action'],
+    details: string,
+    entityId?: string,
+    metadata?: Record<string, unknown>,
+    customUser?: { id: string; name: string; role: 'admin' | 'cashier' }
+  ): void {
+    try {
+      let u = customUser;
+      if (!u) {
+        const users = this.getUsers();
+        const activeId = localStorage.getItem(KEYS.ACTIVE_USER_ID) || 'user_admin';
+        const found = users.find((item) => item.id === activeId);
+        u = {
+          id: found ? found.id : 'user_admin',
+          name: found ? found.name : 'المدير العام',
+          role: found ? found.role : 'admin',
+        };
+      }
+
+      const logEntry: AuditLog = {
+        id: `audit_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        timestamp: new Date().toISOString(),
+        userId: u.id,
+        userName: u.name,
+        userRole: u.role,
+        action,
+        details,
+        entityId,
+        metadata,
+      };
+
+      const existing = getItem<AuditLog[]>(KEYS.AUDIT_LOGS, []);
+      const updated = [logEntry, ...existing].slice(0, 300);
+      setItem(KEYS.AUDIT_LOGS, updated);
+    } catch (e) {
+      console.error('Failed to log audit event:', e);
+    }
+  },
+
+  clearAuditLogs(): boolean {
+    return setItem(KEYS.AUDIT_LOGS, []);
+  },
+
+  // Storage Quota Health Info
+  getStorageQuotaInfo(): StorageQuotaInfo {
+    let usedBytes = 0;
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k) {
+          const val = localStorage.getItem(k) || '';
+          usedBytes += (k.length + val.length) * 2; // UTF-16 characters = 2 bytes
+        }
+      }
+    } catch (e) {
+      usedBytes = 0;
+    }
+
+    const estimatedTotalBytes = 5 * 1024 * 1024; // Standard 5MB LocalStorage limit
+    const percentUsed = Math.min(100, Math.round((usedBytes / estimatedTotalBytes) * 100));
+    const usedFormatted = (usedBytes / 1024).toFixed(1) + ' KB';
+
+    return {
+      usedBytes,
+      usedFormatted,
+      estimatedTotalBytes,
+      percentUsed,
+      isNearQuota: percentUsed > 80,
+    };
   },
 
   // Export / Import Full Database Backup

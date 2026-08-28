@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { StoreSettings, User, AutoBackupEntry } from '../../types';
+import { StoreSettings, User, AutoBackupEntry, AuditLog, StorageQuotaInfo } from '../../types';
 import { StorageService } from '../../services/storage';
 import {
   Settings,
@@ -50,6 +50,8 @@ import {
   History,
   Clock,
   HardDrive,
+  Bell,
+  Gauge,
 } from 'lucide-react';
 
 interface SettingsViewProps {
@@ -121,11 +123,29 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [quickNewPin, setQuickNewPin] = useState<string>('');
   const [quickShowPin, setQuickShowPin] = useState<boolean>(true);
 
-  // Load latest users and auto-backups from storage
+  // Load latest users, auto-backups, audit logs, and storage quota
   const [autoBackups, setAutoBackups] = useState<AutoBackupEntry[]>([]);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [storageQuota, setStorageQuota] = useState<StorageQuotaInfo>({
+    usedBytes: 0,
+    usedFormatted: '0 KB',
+    estimatedTotalBytes: 5242880,
+    percentUsed: 0,
+    isNearQuota: false,
+  });
+  const [auditSearch, setAuditSearch] = useState<string>('');
+  const [auditActionFilter, setAuditActionFilter] = useState<string>('all');
 
   const loadAutoBackups = () => {
     setAutoBackups(StorageService.getAutoBackups());
+  };
+
+  const loadAuditLogs = () => {
+    setAuditLogs(StorageService.getAuditLogs(150));
+  };
+
+  const loadStorageQuota = () => {
+    setStorageQuota(StorageService.getStorageQuotaInfo());
   };
 
   const loadUsersList = () => {
@@ -136,6 +156,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   useEffect(() => {
     loadUsersList();
     loadAutoBackups();
+    loadAuditLogs();
+    loadStorageQuota();
   }, []);
 
   // Update initial form state if currentUser changes
@@ -656,7 +678,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
               {/* Tab: Backup */}
               <button
-                onClick={() => setActiveTab('backup')}
+                onClick={() => {
+                  setActiveTab('backup');
+                  loadStorageQuota();
+                }}
                 className={`px-3 py-1.5 rounded-xl font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
                   activeTab === 'backup'
                     ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-xs'
@@ -664,7 +689,23 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 }`}
               >
                 <Database className="w-3.5 h-3.5 text-blue-500" />
-                <span>النسخ الاحتياطي</span>
+                <span>النسخ الاحتياطي وسعة التخزين</span>
+              </button>
+
+              {/* Tab: Audit Log */}
+              <button
+                onClick={() => {
+                  setActiveTab('audit');
+                  loadAuditLogs();
+                }}
+                className={`px-3 py-1.5 rounded-xl font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                  activeTab === 'audit'
+                    ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-300 hover:text-slate-900'
+                }`}
+              >
+                <Activity className="w-3.5 h-3.5 text-amber-500" />
+                <span>سجل العمليات والتدقيق</span>
               </button>
             </>
           )}
@@ -941,13 +982,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         placeholder="د.ج"
                         className="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-800 dark:text-slate-200 text-center"
                       />
-                      <input
-                        type="text"
-                        value={formData.currencyCode}
-                        onChange={(e) => setFormData({ ...formData, currencyCode: e.target.value })}
-                        placeholder="DZD"
-                        className="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-mono font-bold text-slate-800 dark:text-slate-200 text-center"
-                      />
                     </div>
                   </div>
 
@@ -957,8 +991,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     </label>
                     <input
                       type="text"
-                      value={formData.receiptFooterNote}
-                      onChange={(e) => setFormData({ ...formData, receiptFooterNote: e.target.value })}
+                      value={formData.receiptFooter}
+                      onChange={(e) => setFormData({ ...formData, receiptFooter: e.target.value })}
                       placeholder="شكراً لزيارتكم، دمتم في رعاية الله وحفظه"
                       className="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-800 dark:text-slate-200 focus:outline-none focus:border-blue-500"
                     />
@@ -1862,11 +1896,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                               {b.createdAtFormatted}
                             </span>
                             <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300">
-                              {b.reason}
+                              {b.note || 'نسخة احتياطية'}
                             </span>
                           </div>
                           <div className="flex items-center gap-3 text-[11px] text-slate-500 dark:text-slate-400 mt-1">
-                            <span>📦 {b.productsCount} منتج</span>
+                            <span>📦 {b.itemsCount} منتج</span>
                             <span>•</span>
                             <span>🧾 {b.salesCount} فاتورة</span>
                             <span>•</span>
@@ -1963,6 +1997,48 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
               </div>
 
+              {/* Storage Quota Health & Memory Meter */}
+              <div className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Gauge className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                    <h4 className="text-xs font-bold text-slate-900 dark:text-slate-100">
+                      مؤشر سلامة وسعة التخزين المحلي (LocalStorage Health)
+                    </h4>
+                  </div>
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${
+                    storageQuota.isNearQuota
+                      ? 'bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300'
+                      : 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300'
+                  }`}>
+                    {storageQuota.isNearQuota ? 'تحذير: الذاكرة ممتلئة' : 'الحالة ممتازة ومحمية'}
+                  </span>
+                </div>
+
+                <div className="space-y-1.5">
+                  <div className="flex justify-between text-[11px] text-slate-500 dark:text-slate-400">
+                    <span>المساحة المستخدمة: <strong className="text-slate-800 dark:text-slate-200">{storageQuota.usedFormatted}</strong></span>
+                    <span>الحد التقديري: <strong>5.0 MB</strong> ({storageQuota.percentUsed}%)</span>
+                  </div>
+                  <div className="w-full h-2 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full transition-all duration-500 rounded-full ${
+                        storageQuota.percentUsed > 80
+                          ? 'bg-rose-500'
+                          : storageQuota.percentUsed > 50
+                          ? 'bg-amber-500'
+                          : 'bg-emerald-500'
+                      }`}
+                      style={{ width: `${Math.max(2, storageQuota.percentUsed)}%` }}
+                    />
+                  </div>
+                </div>
+
+                <p className="text-[10px] text-slate-400 dark:text-slate-500 leading-relaxed">
+                  النظام مزود بآلية تقليم تلقائي ذكية تحمي من تجاوز حصة التخزين (Quota Protection) وتمنع توقف المتجر أثناء تسجيل المبيعات.
+                </p>
+              </div>
+
               {/* Clean Slate - Wipe All Data to Zero */}
               <div className="p-4 bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900/60 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="space-y-0.5">
@@ -2027,6 +2103,142 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   إعادة تهيئة النظام
                 </button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* ======================================================== */}
+        {/* ADMIN TAB: AUDIT LOGS & SYSTEM TRAIL (ADMIN ONLY) */}
+        {/* ======================================================== */}
+        {isAdmin && activeTab === 'audit' && (
+          <div className="space-y-4">
+            <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-5 shadow-2xs space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3 gap-3">
+                <div className="space-y-0.5">
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                    <Activity className="w-4 h-4 text-amber-500" />
+                    <span>سجل العمليات والتدقيق الأمني (Audit Log Trail)</span>
+                  </h3>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    تتبع فوري لكافة الإجراءات الحساسة (إنشاء/إلغاء فواتير، تعديل مخزون، سداد ديون، استعادة نسخ).
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      loadAuditLogs();
+                      StorageService.playSuccessBeep();
+                    }}
+                    className="py-1.5 px-3 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>تحديث</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (confirm('هل أنت متأكد من رغبتك في تفريغ سجل العمليات والتدقيق؟')) {
+                        StorageService.clearAuditLogs();
+                        loadAuditLogs();
+                      }
+                    }}
+                    className="py-1.5 px-3 bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>تفريغ السجل</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Filters & Search */}
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  type="text"
+                  placeholder="بحث في تفاصيل السجل أو اسم المستخدم..."
+                  value={auditSearch}
+                  onChange={(e) => setAuditSearch(e.target.value)}
+                  className="flex-1 px-3.5 py-2 bg-slate-50 dark:bg-slate-800 rounded-xl text-xs border border-slate-200 dark:border-slate-700 outline-hidden focus:border-emerald-500"
+                />
+
+                <select
+                  value={auditActionFilter}
+                  onChange={(e) => setAuditActionFilter(e.target.value)}
+                  className="px-3 py-2 bg-slate-50 dark:bg-slate-800 rounded-xl text-xs border border-slate-200 dark:border-slate-700 outline-hidden font-bold"
+                >
+                  <option value="all">كل العمليات</option>
+                  <option value="create_sale">🧾 إنشاء فواتير</option>
+                  <option value="refund_sale">🔄 استرجاع فواتير</option>
+                  <option value="delete_sale">🗑️ حذف فواتير</option>
+                  <option value="add_product">📦 إضافة منتجات</option>
+                  <option value="edit_product">✏️ تعديل منتجات</option>
+                  <option value="delete_product">❌ حذف منتجات</option>
+                  <option value="debt_payment">💰 سداد ديون</option>
+                  <option value="restore_backup">💾 استعادة نسخ</option>
+                </select>
+              </div>
+
+              {/* Audit List */}
+              {auditLogs.length === 0 ? (
+                <div className="p-8 text-center bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-dashed border-slate-200 dark:border-slate-700">
+                  <Activity className="w-8 h-8 text-slate-400 mx-auto mb-2 opacity-50" />
+                  <p className="text-xs font-bold text-slate-600 dark:text-slate-400">
+                    سجل العمليات فارغ حالياً
+                  </p>
+                  <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1">
+                    سيتم تسجيل كافة المعاملات المالية وتعديلات المخزون تلقائياً هنا فور حدوثها.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
+                  {auditLogs
+                    .filter((log) => {
+                      if (auditActionFilter !== 'all' && log.action !== auditActionFilter) return false;
+                      if (!auditSearch.trim()) return true;
+                      const q = auditSearch.toLowerCase();
+                      return (
+                        log.details.toLowerCase().includes(q) ||
+                        log.userName.toLowerCase().includes(q) ||
+                        log.action.toLowerCase().includes(q)
+                      );
+                    })
+                    .map((log) => (
+                      <div
+                        key={log.id}
+                        className="p-3 bg-slate-50/80 dark:bg-slate-800/50 rounded-2xl border border-slate-200/80 dark:border-slate-700/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs hover:border-slate-300 dark:hover:border-slate-600 transition-all"
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <span
+                            className={`w-2 h-2 rounded-full shrink-0 ${
+                              log.action.includes('delete') || log.action.includes('refund')
+                                ? 'bg-rose-500'
+                                : log.action.includes('sale')
+                                ? 'bg-emerald-500'
+                                : 'bg-blue-500'
+                            }`}
+                          />
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-slate-900 dark:text-slate-100">
+                                {log.details}
+                              </span>
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold">
+                                {log.userName} ({log.userRole === 'admin' ? 'مدير' : 'كاشير'})
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="text-[11px] text-slate-400 font-mono flex items-center gap-1.5 self-end sm:self-auto shrink-0">
+                          <Clock className="w-3 h-3 text-slate-400" />
+                          <span>{new Date(log.timestamp).toLocaleTimeString('ar-DZ')} - {new Date(log.timestamp).toLocaleDateString('ar-DZ')}</span>
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              )}
             </div>
           </div>
         )}

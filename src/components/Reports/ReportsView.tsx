@@ -1421,9 +1421,9 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                       className="p-2.5 bg-slate-50 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-between text-xs"
                     >
                       <div>
-                        <div className="font-bold text-slate-900 dark:text-slate-100">{item.product.name}</div>
+                        <div className="font-bold text-slate-900 dark:text-slate-100">{item.name}</div>
                         <div className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
-                          {item.quantity} × {item.price.toFixed(2)} {settings.currencySymbol}
+                          {item.quantity} × {item.unitPrice.toFixed(2)} {settings.currencySymbol}
                         </div>
                       </div>
                       <div className="text-left font-mono">
@@ -1431,7 +1431,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                           {item.total.toFixed(2)} {settings.currencySymbol}
                         </div>
                         <div className="text-[10px] font-bold text-emerald-800 dark:text-emerald-400">
-                          ربح: +{(item.profit * item.quantity).toFixed(2)}
+                          ربح: +{((item.unitPrice - item.costPrice) * item.quantity).toFixed(2)}
                         </div>
                       </div>
                     </div>

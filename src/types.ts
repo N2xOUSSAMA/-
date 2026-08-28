@@ -193,3 +193,24 @@ export interface AutoBackupEntry {
   customersCount: number;
   dataJson: string;
 }
+
+export interface AuditLog {
+  id: string;
+  timestamp: string;
+  userId: string;
+  userName: string;
+  userRole: 'admin' | 'cashier';
+  action: 'create_sale' | 'refund_sale' | 'delete_sale' | 'add_product' | 'edit_product' | 'delete_product' | 'add_customer' | 'debt_payment' | 'restore_backup' | 'settings_change';
+  details: string;
+  entityId?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface StorageQuotaInfo {
+  usedBytes: number;
+  usedFormatted: string;
+  estimatedTotalBytes: number;
+  percentUsed: number;
+  isNearQuota: boolean;
+}
+

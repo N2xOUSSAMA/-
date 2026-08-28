@@ -104,7 +104,7 @@ const LEGACY_GLOBAL_SALT = 'kiosk_pos_secret_salt_2026_';
  * Generates a cryptographically strong pseudo-random salt string.
  */
 export function generateRandomSalt(length: number = 16): string {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()';
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   let salt = '';
   if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
     const bytes = new Uint8Array(length);
