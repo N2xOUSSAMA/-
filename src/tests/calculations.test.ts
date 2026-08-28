@@ -1,24 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { CartItem } from '../types';
-
-function calculateCartTotals(items: CartItem[], discount: number, discountType: 'percentage' | 'fixed', taxRate: number = 0) {
-  const subtotal = items.reduce((sum, item) => sum + item.product.sellingPrice * item.quantity, 0);
-  const costSubtotal = items.reduce((sum, item) => sum + item.product.costPrice * item.quantity, 0);
-  
-  let discountAmount = 0;
-  if (discountType === 'percentage') {
-    discountAmount = (subtotal * Math.min(100, Math.max(0, discount))) / 100;
-  } else {
-    discountAmount = Math.min(subtotal, Math.max(0, discount));
-  }
-
-  const taxableAmount = Math.max(0, subtotal - discountAmount);
-  const taxAmount = (taxableAmount * taxRate) / 100;
-  const total = taxableAmount + taxAmount;
-  const netProfit = Math.max(0, total - costSubtotal);
-
-  return { subtotal, discountAmount, taxAmount, total, netProfit };
-}
+import { calculateCartTotals, calculateWeightedPrice, calculateChange } from '../utils/calculations';
 
 describe('POS Cart & Financial Calculations', () => {
   const mockItems: CartItem[] = [
@@ -85,9 +67,22 @@ describe('POS Cart & Financial Calculations', () => {
   });
 
   it('computes change return accurately', () => {
-    const total = 260;
-    const paidAmount = 500;
-    const change = Math.max(0, paidAmount - total);
-    expect(change).toBe(240);
+    const res = calculateChange(260, 500);
+    expect(res.changeAmount).toBe(240);
+    expect(res.isFullyPaid).toBe(true);
+    expect(res.remainingDue).toBe(0);
+
+    const underpaid = calculateChange(260, 200);
+    expect(underpaid.changeAmount).toBe(0);
+    expect(underpaid.isFullyPaid).toBe(false);
+    expect(underpaid.remainingDue).toBe(60);
+  });
+
+  it('calculates weighted price accurately for bulk goods', () => {
+    // 500 DZD per KG, 250 grams = 125 DZD
+    expect(calculateWeightedPrice(500, 250)).toBe(125);
+    // 1200 DZD per KG, 750 grams = 900 DZD
+    expect(calculateWeightedPrice(1200, 750)).toBe(900);
   });
 });
+
