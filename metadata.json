@@ -1,0 +1,10 @@
+{
+  "name": "كشك متعدد الخدمات العصري (Multi-Services POS)",
+  "description": "نظام كاشير وإدارة متكامل لكشك متعدد الخدمات: فليكسي، بطاقات إنترنت وألعاب، بيع المكسرات والمواد بالميزان، سجائر بالحبة والعلبة، طباعة ونسخ، وإدارة متقدمة للأسعار والمخزون والأرباح.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
